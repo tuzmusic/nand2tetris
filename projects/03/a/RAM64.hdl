@@ -1,0 +1,37 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/03/a/RAM64.hdl
+
+/**
+ * Memory of 64 registers, each 16 bit-wide. Out holds the value
+ * stored at the memory location specified by address. If load==1, then 
+ * the in value is loaded into the memory location specified by address 
+ * (the loaded value will be emitted to out from the next time step onward).
+ */
+
+CHIP RAM64 {
+    IN in[16], load, address[6];
+    OUT out[16];
+
+    PARTS:
+    // use the address to determine where (to which RAM) to send the load bit
+    // in[1], sel[3], a-h[1]
+
+    DMux8Way(in=load, sel=address[0..2], a=dmout0, b=dmout1, c=dmout2, d=dmout3, e=dmout4, f=dmout5, g=dmout6, h=dmout7);
+
+    // send in value to all registers. the dmux output will determine which one will get the load signal.
+    // other registers will "ignore" the input signal.
+    RAM8(in=in, load=dmout0, address=address[3..5], out=ram0);
+    RAM8(in=in, load=dmout1, address=address[3..5], out=ram1);
+    RAM8(in=in, load=dmout2, address=address[3..5], out=ram2);
+    RAM8(in=in, load=dmout3, address=address[3..5], out=ram3);
+    RAM8(in=in, load=dmout4, address=address[3..5], out=ram4);
+    RAM8(in=in, load=dmout5, address=address[3..5], out=ram5);
+    RAM8(in=in, load=dmout6, address=address[3..5], out=ram6);
+    RAM8(in=in, load=dmout7, address=address[3..5], out=ram7);
+
+    // take the signal (16-bit) from all registers, and use the address to select which one to send to the output (16-bit)
+    // a-h[16], sel[3], out[16]
+    Mux8Way16(a=ram0, b=ram1, c=ram2, d=ram3, e=ram4, f=ram5, g=ram6, h=ram7, sel=address[0..2], out=out);
+}

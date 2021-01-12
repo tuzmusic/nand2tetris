@@ -1,0 +1,186 @@
+/**
+ The Hack CPU (Central Processing unit), consisting of an ALU,
+ two registers named A and D, and a program counter named PC.
+ The CPU is designed to fetch and execute instructions written in 
+ the Hack machine language. In particular, functions as follows:
+ 
+ Executes the inputted instruction according to the Hack machine 
+ language specification. 
+ 
+ The D and A in the language specification refer to CPU-resident registers, 
+ while M refers to the external memory location addressed by A, i.e. to Memory[A]. 
+ The inM input holds the value of this location. 
+ 
+ If the current instruction needs to write a value to M, 
+    the value is placed in outM, 
+    the address of the target location is placed in the addressM output, 
+    and the writeM control bit is asserted. 
+    (When writeM==0, any value may appear in outM). 
+ 
+ The outM and writeM outputs are combinational: 
+ they are affected instantaneously by the execution of the current instruction. 
+ The addressM and pc outputs are clocked:
+ although they are affected by the execution of the current instruction, 
+ they commit to their new values only in the next time step. 
+ 
+ If reset==1 then the CPU jumps to address 0 (i.e. pc is set to 0 in next time step) 
+ rather than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+
+/* INSTRUCTIONS */
+    /* 
+      instr[15]     OPCODE
+        opcode == 0 ? A-instruction : C-instruction (e.g., D=D+1, JMP)
+      instr[0..2]   JUMP BITS
+      instr[6..11]  ALU CONTROL BITS ("comp bits", c1-c6)
+      instr[12]     comp bits apply to a (0) or m (1)?
+      instr[13..14] UNUSED
+      instr[3..5]   DESTINATION LOAD BITS
+     */
+    Mux16(a=instruction,       // a instruction (opcode == 0)
+          b=instrMux1,          // c instruction (opcode == 1)
+          sel=instruction[15], // a or c? That's what the opcode is!
+          out=instrMuxOut);    // very clear from the diagram (aka, simply named anyway)
+
+    // A REGISTER (Register out is [16], addressM is [15]!!!)
+    Not(in=instruction[15], out=isAInstruction); // if opcode == 0, A-instruction writes to A
+    Or(a=isAInstruction, b=instruction[5], out=shouldWriteToA); // or if instruction[5] is 1, C-instruction writes to A. 
+
+    // IMPORTANT: THERE IS AN ARegister chip! why?
+    ARegister(in=instrMuxOut, /* ignore opcode? (instrMuxOut[15]) -- since the input to the A register is everything besides the opcode */
+             load=shouldWriteToA,
+             out=inmMuxA,
+             out=PCin,
+             out[0..14]=addressM); /* need to take 15 of 16 bits. pretty sure this is right */
+
+/* MEMORY */
+    // IMPORTANT: THERE IS A DRegister chip! why?
+    // D REGISTER (temp memory?)
+    DRegister(in=DRegIn,
+             load=instruction[4], // see C-instruction spec. d2 (instr[4]) determines if we write to D
+             out=DRegOut);
+
+    Mux16(a=inmMuxA, 
+          b=inM, 
+          sel=instruction[12], // comp bits apply to a (0) or m (1)?
+          out=inmMuxOut);
+    
+    And(a=true, b=instruction[3], out=writeM); // see C-instruction spec. d3 (instr[3]) determines if we write to M
+          
+/* CONTROL/CALCULATION */
+    // ALU
+    /* 
+    X is D
+    Y is A or M (which is determined by the Mux, so, we don't have to deal with it here)
+     */
+    ALU(x=DRegOut, y=inmMuxOut,  // inputs
+    // control
+      /* X is 0 for 
+       comp   c1 c2 c3 c4 c5 c6
+       0      1  0  1  0  1  0     zx && zy
+       1      1  1  1  1  1  1     
+       -1      1  1  1  0  1  0
+       D       0  0  1  1  0  0
+       A       1  1  0  0  0  0
+       !D      0  0  1  1  0  1
+       !A      1  1  0  0  0  1
+       -D      0  0  1  1  1  1
+       -A      1  1  0  0  1  1
+       D+1      0  1  1  1  1  1
+       A+1      1  1  0  1  1  1
+       D-1      0  0  1  1  1  0
+       A-1      1  1  0  0  1  0
+       D+A      0  0  0  0  1  0
+       D-A      0  1  0  0  1  1
+       A-D      0  0  0  1  1  1
+       D&A      0  0  0  0  0  0
+       D|A      0  1  0  1  0  1
+    
+    
+    
+    */
+    zx=instruction[12],     
+    nx=instruction[11],     
+    zy=instruction[10],     
+    ny=instruction[9],     
+    f=instruction[8],     
+    no=instruction[7],
+
+    // output
+    zr=isAluZero, 
+    ng=isAluNegative,
+    out=outM,
+    out=DRegIn,
+    out=instrMux1);
+
+    // PC (PC's out is [16], CPU's pc out is [15]!!!)
+    // emits the address of the next instruction
+/* JUMPING
+     PC precedence: reset, load, inc, nothing.
+
+     JUMPING
+      Load (whether to jump) and input (where to jump) still needs to come from somewhere!
+      PC's input is the in
+
+      instruction[0..2] are the JUMP BITS
+      the jump bits determine what is the condition under which we should jump
+     */     
+    //  jump  j1  j2  j3  effect
+
+    //  JGT   0   0   1   if out>0 jump
+    Or(a=isAluNegative, b=isAluZero, out=isAluNotPositive);
+    Not(in=isAluNotPositive, out=isAluPositive);
+    And(a=isAluPositive, b=instruction[0], out=jumpBecauseJGT);
+
+    //  JEQ   0   1   0   if out=0 jump
+    And(a=isAluZero, b=instruction[1], out=jumpBecauseJEQ);
+
+    //  JGE   0   1   1   if out≥0 jump
+    Not(in=isAluNegative, out=isAluNonNegative);
+    And(a=isAluNonNegative, b=j2ANDj3, out=jumpBecauseJGE);
+
+    //  JLT   1   0   0   if out<0 jump
+    And(a=isAluNegative, b=instruction[2], out=jumpBecauseJLT);
+
+    //  JNE   1   0   1   if out≠0 jump
+    And(a=instruction[2], b=instruction[0], out=j1ANDj3);
+    Not(in=isAluZero, out=isAluNotZero);
+    And(a=isAluNotZero, b=j1ANDj3, out=jumpBecauseJNE);
+
+    //  JLE   1   1   0   if out≤0 jump
+    And(a=instruction[2], b=instruction[1], out=j1ANDj2);
+    And(a=isAluNotPositive, b=j1ANDj2, out=jumpBecauseJLE);
+
+    // JMP   1   1   1   unconditional jump
+    And(a=instruction[0], b=instruction[1], out=j2ANDj3);
+    And(a=instruction[3], b=j2ANDj3, out=alwaysJump);
+
+    Or(a=jumpBecauseJGT, b=jumpBecauseJEQ, out=orAB);
+    Or(a=jumpBecauseJGE, b=jumpBecauseJLT, out=orCD);
+    Or(a=jumpBecauseJNE, b=jumpBecauseJLE, out=orEF);
+
+    Or(a=orAB, b=orCD, out=orABCD);
+    Or(a=orEF, b=alwaysJump, out=orEFG);
+    Or(a=orABCD, b=orEFG, out=shouldJump);
+    Not(in=shouldJump, out=shouldNotJump);    
+    PC(in=PCin, 
+       load=shouldJump, 
+       inc=shouldNotJump,
+       reset=reset, 
+       out[0..14]=pc); // out[15], pc[16]   
+}

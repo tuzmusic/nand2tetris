@@ -1,0 +1,84 @@
+/**
+ * The complete address space of the Hack computer's memory,
+ * including RAM and memory-mapped I/O. 
+ * The chip facilitates read and write operations, as follows:
+ *     Read:  out(t) = Memory[address(t)](t)
+ *     Write: if load(t-1) then Memory[address(t-1)](t) = in(t-1)
+ * In words: the chip always outputs the value stored at the memory 
+ * location specified by address. If load==1, the in value is loaded 
+ * into the memory location specified by address. This value becomes 
+ * available through the out output from the next time step onward.
+ * Address space rules:
+ * Only the upper 16K+8K+1 words of the Memory chip are used. 
+ * Access to address>0x6000 is invalid. Access to any address in 
+ * the range 0x4000-0x5FFF results in accessing the screen memory 
+ * map. Access to address 0x6000 results in accessing the keyboard 
+ * memory map. The behavior in these addresses is described in the 
+ * Screen and Keyboard chip specifications given in the book.
+ */
+
+CHIP Memory {
+    IN in[16], load, address[15]; // addr[0-14]
+    OUT out[16];
+    // RAM16 has 14-bit address
+    // Screen has 13-bit address
+    // Keyboard is simply a 16-bit out!
+    /* Implementation outline:
+     * • Uses RAM16K, Screen (8K registers), and Keyboard (1 register)
+     * • Routes the address input to the correct address input of the relevant chip-part. 
+     */
+    PARTS:
+
+    /* pseudocode routing
+      if load == 0
+        read the address
+      if load == 1
+        if address < 0x4000 
+          write input to RAM (only!)
+        if 0x4000 =< address < 0x6000
+          write input to SCREEN (only!)    
+     */
+
+     /* determining address range
+      addr[14] = 0 when addr < 0x4000
+      addr[14] = 1 when addr >= 0x4000
+      addr[14]=1 && addr[13]=0 when 0x4000 =< addr < 0x6000 (SCREEN)
+      addr[14]=1 && addr[13]=1 && addr[0..12]=0 when addr >= 0x6000 (KEYBOARD)
+      100000000000000
+      */
+
+      /* Strategy
+      Can't use DMux with 16bits, right?
+
+      For screen or ram, EITHER
+        A: They will always WRITE an input when load=1, (always receive IN and LOAD)
+           and the mux will pick between writing the new input and rewriting the chip's old output
+        B: Something with load && addr[14] becomes the ram/screen load bit; and the one that gets a 
+            0 load bit will output something but it will be ignored.        
+       */
+
+      // SOLUTION A
+      
+      /* NOTE: running this with the compare file fails at line 41, 
+         according to the hardware sim. However comparing the output 
+         to the cmp file does NOT bear this out.
+         And, running without comparing gives the correct output file,
+         as well as appearing as the comments indicate.
+       */
+
+      // RAM (14-bit address)
+      Mux16(a=in, b=rout, sel=address[14], out=rmux);
+      RAM16K(in=rmux, load=load, address=address[0..13], out=rout);
+
+      // SCREEN (13-bit address)
+      Mux16(a=sout, b=in, sel=address[14], out=smux);
+      Screen(in=smux, load=load, address=address[0..12], out=sout);
+
+      // Load from keyboard or screen?
+      Keyboard(out=kout);
+      Mux16(a=sout, b=kout, sel=address[13], out=kmuxs);
+
+      // Output from Keyboard/Screen or RAM?
+      Mux16(a=rout, b=kmuxs, sel=address[14], out=out);
+      // 7 chips       
+}
